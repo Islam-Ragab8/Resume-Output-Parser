@@ -1,52 +1,39 @@
 import streamlit as st
-import os
+import torch
 from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.output_parsers import StructuredOutputParser, ResponseSchema
 from langchain.prompts import PromptTemplate
 from langchain_groq import ChatGroq
+import os
 from dotenv import load_dotenv
 
-# -----------------------------
-# Load env
-# -----------------------------
 load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# -----------------------------
-# Initialize model
-# -----------------------------
+
 model = ChatGroq(
     model="meta-llama/llama-4-scout-17b-16e-instruct",
-    api_key=GROQ_API_KEY,
+    api_key=os.getenv("GROQ_API_KEY"),
     temperature=0
 )
 
-st.title("CV JSON Parser with LLM")
+# Streamlit UI
+st.title("CV JSON Extractor")
 
-# -----------------------------
-# Upload PDF
-# -----------------------------
 uploaded_file = st.file_uploader("Upload your CV (PDF)", type="pdf")
 
 if uploaded_file is not None:
-    # 🔹 Save temp file
-    temp_path = "temp_cv.pdf"
-    with open(temp_path, "wb") as f:
+    with open("temp.pdf", "wb") as f:
         f.write(uploaded_file.getbuffer())
-
-    # 🔹 Load PDF
-    loader = PyPDFLoader(temp_path)
+    
+    loader = PyPDFLoader("temp.pdf")
     pages = loader.load()
     text = " ".join([page.page_content for page in pages])
-
-    # 🔹 Split text to chunks
+    
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunks = text_splitter.split_text(text)
 
-    # -----------------------------
-    # Define output schema
-    # -----------------------------
+   
     schemas = [
         ResponseSchema(name="full_name", description="The candidate's full name."),
         ResponseSchema(name="email", description="The candidate's email address."),
@@ -58,15 +45,12 @@ if uploaded_file is not None:
     out_parser = StructuredOutputParser.from_response_schemas(schemas)
     format_instructions = out_parser.get_format_instructions()
 
-    # -----------------------------
-    # Prompt template
-    # -----------------------------
+    
     CV_extraction_template = """
 You are an intelligent CV parser. Extract the following information from the provided resume text:
 
 - Full name
 - Email
-- Phone number
 - Education (degree, institution, year)
 - Skills
 - Experience (role, company, years)
@@ -81,19 +65,19 @@ Resume text:
     prompt = PromptTemplate(
         template=CV_extraction_template,
         input_variables=["chunks", "format_instructions"]
-    ).format_prompt(chunks=chunks, format_instructions=format_instructions)
+    )
+    prompt_text = prompt.format_prompt(chunks=chunks, format_instructions=format_instructions).to_string()
 
-    # -----------------------------
-    # Get response
-    # -----------------------------
-    with st.spinner("Parsing CV..."):
-        response = model.predict(prompt.to_string())
     
-    # -----------------------------
-    # Show JSON output
-    # -----------------------------
-    st.subheader("Parsed CV JSON Output")
-    st.json(response)
-
-    # Optional: remove temp file
-    os.remove(temp_path)
+    with st.spinner("Parsing CV..."):
+        response = model.predict(prompt_text)
+    
+    
+    try:
+        parsed_output = out_parser.parse(response)
+        st.subheader("Extracted JSON")
+        st.json(parsed_output)
+    except Exception as e:
+        st.error(f"Failed to parse JSON: {e}")
+        st.write("Raw output from model:")
+        st.code(response)
